@@ -1,4 +1,14 @@
-sentence-transformers>=2.6.0
+mistralai>=1.0.0
 psycopg2-binary>=2.9.9
-numpy>=1.26.0
-pdfplumber>=0.11.0
+pgvector>=0.2.4
+python-dotenv>=1.0.0
+langchain>=0.2.0
+langchain-mistralai>=0.1.0
+langgraph>=0.1.0
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pypdf>=4.0.0
+ragas>=0.1.9
+datasets>=2.19.0
+numpy>=1.26.4
+pandas>=2.0.0

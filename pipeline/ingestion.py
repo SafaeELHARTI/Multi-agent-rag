@@ -1,19 +1,22 @@
 from __future__ import annotations
 
-import argparse
 import os
 import uuid
-from typing import List
+import time
+from typing import List, Tuple
 
 import psycopg2
 from psycopg2.extras import execute_values
+from pypdf import PdfReader
+from dotenv import load_dotenv
 
-from pipeline.embeddings import embed_texts, EMBEDDING_DIM
+load_dotenv()
 
 DB_URL = os.getenv("DATABASE_URL", "postgresql://rag:rag@localhost:5432/ragdb")
 
-CHUNK_SIZE = 512
-CHUNK_OVERLAP = 64
+EMBEDDING_DIM = 1024
+CHUNK_SIZE = 800
+CHUNK_OVERLAP = 100
 
 
 def get_connection():
@@ -36,7 +39,7 @@ def setup_schema(conn) -> None:
             CREATE INDEX IF NOT EXISTS documents_embedding_idx
             ON documents
             USING ivfflat (embedding vector_cosine_ops)
-            WITH (lists = 100);
+            WITH (lists = 1);
         """)
     conn.commit()
 
@@ -45,81 +48,87 @@ def chunk_text(text: str) -> List[str]:
     text = text.strip()
     if not text:
         return []
-
     chunks = []
     start = 0
-    while start < len(text):
-        end = min(start + CHUNK_SIZE, len(text))
-
-        if end < len(text):
-            for boundary in (".\n", ". ", "\n\n", "\n"):
-                idx = text.rfind(boundary, start, end)
-                if idx != -1:
-                    end = idx + len(boundary)
-                    break
-
+    length = len(text)
+    while start < length:
+        end = min(start + CHUNK_SIZE, length)
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
-
-        start = end - CHUNK_OVERLAP
-
+        next_start = end - CHUNK_OVERLAP
+        if next_start <= start:
+            next_start = start + CHUNK_SIZE
+        start = next_start
     return chunks
 
 
-def load_text(file_path: str) -> str:
-    if file_path.endswith(".pdf"):
-        try:
-            import pdfplumber
-            with pdfplumber.open(file_path) as pdf:
-                return "\n\n".join(page.extract_text() or "" for page in pdf.pages)
-        except ImportError:
-            raise ImportError("Run: pip install pdfplumber")
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        return f.read()
+def load_pdf(file_path: str) -> str:
+    reader = PdfReader(file_path)
+    pages = []
+    for page in reader.pages:
+        text = page.extract_text()
+        if text:
+            pages.append(text)
+    return "\n\n".join(pages)
 
 
-def ingest_file(file_path: str) -> int:
+def ingest_file(file_path: str, embed_fn=None) -> int:
+    from pipeline.embeddings import embed_texts
+    if embed_fn is None:
+        embed_fn = embed_texts
+
     print(f"Loading {file_path}...")
-    text = load_text(file_path)
+    reader = PdfReader(file_path)
 
-    print("Chunking...")
-    chunks = chunk_text(text)
-    print(f"  → {len(chunks)} chunks")
-
-    print("Embedding...")
-    embeddings = embed_texts(chunks)
-
-    print("Storing in pgvector...")
     conn = get_connection()
     setup_schema(conn)
 
-    rows = [
-        (str(uuid.uuid4()), file_path, idx, chunk, embedding.tolist())
-        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings))
-    ]
+    total = 0
+    chunk_index = 0
 
-    with conn.cursor() as cur:
-        execute_values(
-            cur,
-            """
-            INSERT INTO documents (id, source, chunk_index, content, embedding)
-            VALUES %s ON CONFLICT DO NOTHING;
-            """,
-            rows,
-        )
-    conn.commit()
+    for page_num, page in enumerate(reader.pages):
+        text = page.extract_text()
+        if not text or not text.strip():
+            continue
+
+        text = text.strip()
+        start = 0
+        while start < len(text):
+            end = min(start + CHUNK_SIZE, len(text))
+            chunk = text[start:end].strip()
+
+            if chunk and len(chunk) > 50:
+                embedding = embed_fn([chunk])[0]
+                time.sleep(0.5)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO documents (id, source, chunk_index, content, embedding)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT DO NOTHING;
+                        """,
+                        (str(uuid.uuid4()), file_path, chunk_index, chunk, embedding.tolist())
+                    )
+                conn.commit()
+                chunk_index += 1
+                total += 1
+                print(f"  page {page_num+1}, chunk {chunk_index} stored")
+
+            next_start = end - CHUNK_OVERLAP
+            if next_start <= start:
+                next_start = start + CHUNK_SIZE
+            start = next_start
+
     conn.close()
+    print(f"Done. {total} chunks stored.")
+    return total
 
-    print(f"Done. {len(chunks)} chunks stored.")
-    return len(chunks)
 
-
-def retrieve(query_embedding, top_k: int = 5):
-    """Return top-k chunks most similar to query_embedding."""
+def retrieve(query_embedding, top_k: int = 5) -> List[Tuple[str, float]]:
     conn = get_connection()
     with conn.cursor() as cur:
+        cur.execute("SET ivfflat.probes = 10;")
         cur.execute(
             """
             SELECT content, 1 - (embedding <=> %s::vector) AS similarity
@@ -132,10 +141,3 @@ def retrieve(query_embedding, top_k: int = 5):
         results = cur.fetchall()
     conn.close()
     return results
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--file", required=True)
-    args = parser.parse_args()
-    ingest_file(args.file)
