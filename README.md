@@ -4,24 +4,24 @@ A production-ready Retrieval-Augmented Generation system with a multi-agent arch
 
 ## Architecture
 
-```
-User Query → FastAPI → LangGraph Orchestrator
-                              ↓
-                    [Retriever Agent]
-                    Embeds query via Mistral API
-                    Searches pgvector (cosine similarity)
-                    Returns top-5 relevant chunks
-                              ↓
-                    [Summarizer Agent]
-                    Condenses retrieved chunks
-                    LLM call #1 (Mistral)
-                              ↓
-                    [Answer Agent]
-                    Generates grounded final answer
-                    LLM call #2 (Mistral)
-                              ↓
-                    RAGAS Evaluation
-                    (Faithfulness + Answer Relevancy)
+```mermaid
+flowchart TD
+    A[User Query] --> B[FastAPI /ask]
+    B --> C[LangGraph Orchestrator]
+    C --> D[Retriever Agent]
+    D --> E[(pgvector\nPostgreSQL)]
+    E --> D
+    D --> F[Summarizer Agent\nLLM call #1]
+    F --> G[Answer Agent\nLLM call #2]
+    G --> H[Final Answer]
+    H --> B
+
+    style A fill:#4A90D9,color:#fff
+    style H fill:#27AE60,color:#fff
+    style D fill:#8E44AD,color:#fff
+    style F fill:#8E44AD,color:#fff
+    style G fill:#8E44AD,color:#fff
+    style E fill:#E67E22,color:#fff
 ```
 
 ## Stack
