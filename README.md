@@ -139,6 +139,18 @@ multi-agent-rag/
 └── requirements.txt
 ```
 
+## User Interface
+
+A Streamlit UI is available for interactive Q&A:
+
+```bash
+streamlit run app.py
+```
+
+Then open http://localhost:8501 in your browser.
+
+![UI](https://img.shields.io/badge/Streamlit-FF4B4B?style=flat&logo=streamlit&logoColor=white)
+
 ## Key Technical Decisions
 
 **Why Mistral for embeddings?** French sovereign AI, no data leaves France — aligned with Lyha's infrastructure philosophy. 1024-dim vectors outperform smaller models on semantic similarity.
